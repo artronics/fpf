@@ -10,9 +10,6 @@ pub const Search = struct {
         _ = self;
         var score = Score{};
 
-        // if (pattern.len == 0) return score;
-        // if (text.len == 0) return null;
-
         var i = text.len;
         var j = pattern.len;
         var last_pj: u8 = undefined;
@@ -22,7 +19,6 @@ pub const Search = struct {
 
         var boundary: ?[]const u8 = null;
         var boundary_end: usize = undefined;
-        // var start_b: usize = undefined;
 
         while (i > 0 and j > 0) : (i -= 1) {
             const ti = text[i - 1];
@@ -33,7 +29,6 @@ pub const Search = struct {
             }
             if (is_start_boundary(text, i - 1)) {
                 boundary = text[i - 1 .. boundary_end];
-                std.log.warn("boundary: {?s}", .{boundary});
             } else {
                 boundary = null;
             }
@@ -66,13 +61,18 @@ pub const Search = struct {
             }
         }
 
-        if (j == 0) {
+        return if (j == 0) {
             // commit what is left + kill
             score.straight(straight_acc);
             score.delete(delete_acc);
-        }
+            // calculate kill
+            while (i > 0) : (i -= 1) {
+                var ti = text[i - 1];
+                if (in_path_sep_set(ti)) break else score.kill(1);
+            }
 
-        return if (j == 0) score else null;
+            return score;
+        } else null;
     }
 
     const Score = struct {
@@ -84,6 +84,9 @@ pub const Search = struct {
 
         qb: isize = -1,
         _boundary: isize = 0,
+
+        qk: isize = -1,
+        _kill: isize = 0,
 
         _straight_acc: isize = 0,
         inline fn qs(x: u5) isize {
@@ -104,6 +107,9 @@ pub const Search = struct {
         inline fn boundary(self: *Score) void {
             self._boundary += 1;
         }
+        inline fn kill(self: *Score, x: isize) void {
+            self._kill += x;
+        }
         inline fn straight(self: *Score, x: u5) void {
             self._straight_acc += qs(x);
         }
@@ -111,10 +117,18 @@ pub const Search = struct {
             return self._copy * self.qc +
                 self._delete * self.qd +
                 self._boundary * self.qb +
+                self._kill * self.qk +
                 self._straight_acc;
         }
         fn string(self: Score, allocator: Allocator) ![]u8 {
-            return std.fmt.allocPrint(allocator, "copy: {d}\ndelete: {d}\nboundary: {d}\nstraight_acc: {d}\nSCORE: {d}", .{ self._copy, self._delete, self._boundary, self._straight_acc, self.score() });
+            return std.fmt.allocPrint(allocator, "\ncopy: {d}\ndelete: {d}\nboundary: {d}\nkill: {d}\nstraight_acc: {d}\nSCORE: {d}\n--------", .{
+                self._copy,
+                self._delete,
+                self._boundary,
+                self._kill,
+                self._straight_acc,
+                self.score(),
+            });
         }
 
         test "score" {
@@ -131,19 +145,29 @@ pub const Search = struct {
             s.boundary();
             try expect(s._boundary == 2);
 
+            s.kill(5);
+            try expect(s._kill == 5);
+
             try expect(Score.qs(0) == 0);
             s.straight(3);
             try expect(s._straight_acc == qs(3));
 
             const total = s.score();
-            try expect(total == s._copy * s.qc + s._delete * s.qd + s._boundary * s.qb + s._straight_acc);
+            try expect(total == s._copy * s.qc + s._delete * s.qd + s._boundary * s.qb + s._kill * s.qk + s._straight_acc);
         }
     };
 
-    const boundary_set = [_]u8{ '.', '_', ' ', '-', '/', '\\' };
-    inline fn in_boundary_set(ch: u8) bool {
+    const path_separator = [_]u8{ '.', '/', '\\' };
+    const boundary_set = [_]u8{ '_', ' ', '-' } ++ path_separator;
+    fn in_boundary_set(ch: u8) bool {
         inline for (boundary_set) |b| {
             if (ch == b) return true;
+        }
+        return false;
+    }
+    fn in_path_sep_set(ch: u8) bool {
+        inline for (path_separator) |s| {
+            if (ch == s) return true;
         }
         return false;
     }
@@ -215,6 +239,8 @@ test "match" {
     try expect(r != null);
     r = try s.search("a", "");
     try expect(r != null);
+    r = try s.search("", "a");
+    try expect(r == null);
 
     r = try s.search("a", "a");
     try expect(r != null);
@@ -233,16 +259,12 @@ test "score" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
+    _ = a;
 
     var s = Search{};
 
     { // Copy
-        var r = try s.search("", "");
-        try expect(r.?.score() == 0);
-        r = try s.search("a", "");
-        try expect(r.?.score() == 0);
-
-        r = try s.search("axy", "a");
+        var r = try s.search("axy", "a");
         try expect(r.?._copy == 1);
         r = try s.search("xya", "a");
         try expect(r.?._copy == 1);
@@ -283,16 +305,30 @@ test "score" {
         try expect(r.?._delete == 0);
         try expect(r.?._boundary == 1);
 
-        r = try s.search("_axx_foo", "afoo");
-        std.log.warn("{s}", .{try r.?.string(a)});
+        r = try s.search("?_a_b_c", "abc");
+        try expect(r.?._delete == 0);
+        try expect(r.?._boundary == 0);
 
+        r = try s.search("_axx_foo", "afoo");
+        try expect(r.?._delete == 0);
+        try expect(r.?._boundary == 1);
+
+        r = try s.search("_axx_fff", "af");
         try expect(r.?._delete == 0);
         try expect(r.?._boundary == 1);
 
         r = try s.search("_?ax_xbx", "ab");
-        std.log.warn("{s}", .{try r.?.string(a)});
-
         try expect(r.?._delete == 4);
         try expect(r.?._boundary == 0);
+    }
+    { // Kill
+        var r = try s.search("a", "a");
+        try expect(r.?._kill == 0);
+
+        r = try s.search("xxa???", "a");
+        try expect(r.?._kill == 2);
+
+        r = try s.search("??/xxa???", "a");
+        try expect(r.?._kill == 2);
     }
 }
