@@ -113,7 +113,7 @@ pub const Search = struct {
         inline fn straight(self: *Score, x: u5) void {
             self._straight_acc += qs(x);
         }
-        inline fn score(self: Score) isize {
+        pub inline fn score(self: Score) isize {
             return self._copy * self.qc +
                 self._delete * self.qd +
                 self._boundary * self.qb +
@@ -291,6 +291,9 @@ test "score" {
         try expect(r.?._straight_acc == qs(3));
 
         r = try s.search("?ab?cde?", "abcde");
+        try expect(r.?._straight_acc == qs(2) + qs(3));
+
+        r = try s.search("?ab_cde?", "abcde");
         try expect(r.?._straight_acc == qs(2) + qs(3));
     }
     { // Delete
